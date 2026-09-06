@@ -32,6 +32,10 @@
 #include "modules/audio_device/include/audio_device.h"
 #include "rtc_base/logging.h"
 
+#ifdef _WIN32
+#include "media/audio/windows/WasapiLoopbackAdm.h"
+#endif
+
 JNIEXPORT void JNICALL Java_dev_onvoid_webrtc_media_audio_AudioDeviceModule_initPlayout
 (JNIEnv * env, jobject caller)
 {
@@ -472,6 +476,34 @@ JNIEXPORT void JNICALL Java_dev_onvoid_webrtc_media_audio_AudioDeviceModule_disp
 JNIEXPORT void JNICALL Java_dev_onvoid_webrtc_media_audio_AudioDeviceModule_initialize
 (JNIEnv * env, jobject caller, jobject jAudioLayer)
 {
+	// kWindowsWasapiLoopback lives at the end of the Java enum (ordinal 11)
+	// but has no counterpart in libwebrtc's native AudioLayer, so we
+	// intercept it here before it reaches JavaEnums::toNative (which would
+	// produce a garbage cast).
+	jclass enumClass = env->GetObjectClass(jAudioLayer);
+	jmethodID ordinalMethod = env->GetMethodID(enumClass, "ordinal", "()I");
+	int ordinal = env->CallIntMethod(jAudioLayer, ordinalMethod);
+
+#ifdef _WIN32
+	constexpr int kWasapiLoopbackOrdinal = 11;
+	if (ordinal == kWasapiLoopbackOrdinal) {
+		auto audioModule = mdt::WasapiLoopbackAdm::Create();
+
+		if (!audioModule) {
+			env->Throw(jni::JavaError(env, "Create WasapiLoopbackAdm failed"));
+			return;
+		}
+
+		if (audioModule->Init() != 0) {
+			env->Throw(jni::JavaError(env, "Initialize WasapiLoopbackAdm failed"));
+			return;
+		}
+
+		SetHandle(env, caller, audioModule.release());
+		return;
+	}
+#endif
+
 	std::unique_ptr<webrtc::TaskQueueFactory> taskQueueFactory = webrtc::CreateDefaultTaskQueueFactory();
 
 	if (!taskQueueFactory) {

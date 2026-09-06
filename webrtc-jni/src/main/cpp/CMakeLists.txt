@@ -79,7 +79,7 @@ if(APPLE)
 elseif(LINUX)
 	target_link_libraries(${PROJECT_NAME} -static-libgcc -static-libstdc++ pulse udev)
 elseif(WIN32)
-	target_link_libraries(${PROJECT_NAME} mf.lib mfreadwrite.lib mfplat.lib mfuuid.lib)
+	target_link_libraries(${PROJECT_NAME} mf.lib mfreadwrite.lib mfplat.lib mfuuid.lib ole32.lib)
 endif()
 
 install(TARGETS ${PROJECT_NAME}

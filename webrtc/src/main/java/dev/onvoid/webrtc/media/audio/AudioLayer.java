@@ -11,5 +11,6 @@ public enum AudioLayer {
 	kAndroidJavaInputAndOpenSLESOutputAudio,
 	kAndroidAAudioAudio,
 	kAndroidJavaInputAndAAudioOutputAudio,
-	kDummyAudio
+	kDummyAudio,
+	kWindowsWasapiLoopback
 }
