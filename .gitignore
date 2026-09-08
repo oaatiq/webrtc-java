@@ -14,3 +14,7 @@
 *.so
 *.dylib
 *.dll
+
+# MDT kWindowsWasapiLoopback build — local logs / logged wrapper (not source)
+*.log
+build-mdt-logged.bat

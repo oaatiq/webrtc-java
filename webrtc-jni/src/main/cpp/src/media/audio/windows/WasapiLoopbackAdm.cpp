@@ -111,6 +111,14 @@ int32_t WasapiLoopbackAdm::StopPlayout() { return 0; }
 bool WasapiLoopbackAdm::Playing() const { return false; }
 int32_t WasapiLoopbackAdm::PlayoutDelay(uint16_t* delayMS) const { *delayMS = 0; return 0; }
 
+// ---- Built-in audio processing (not applicable for loopback) ----
+bool WasapiLoopbackAdm::BuiltInAECIsAvailable() const { return false; }
+bool WasapiLoopbackAdm::BuiltInAGCIsAvailable() const { return false; }
+bool WasapiLoopbackAdm::BuiltInNSIsAvailable() const { return false; }
+int32_t WasapiLoopbackAdm::EnableBuiltInAEC(bool /*enable*/) { return -1; }
+int32_t WasapiLoopbackAdm::EnableBuiltInAGC(bool /*enable*/) { return -1; }
+int32_t WasapiLoopbackAdm::EnableBuiltInNS(bool /*enable*/) { return -1; }
+
 // ---- Device enumeration (one virtual recording device, no playout) ----
 
 int16_t WasapiLoopbackAdm::PlayoutDevices() { return 0; }

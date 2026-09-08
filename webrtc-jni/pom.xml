@@ -143,7 +143,7 @@
 				</os>
 			</activation>
 			<properties>
-				<cmake.options>-Ax64</cmake.options>
+				<cmake.options>-GNinja</cmake.options>
 				<cmake.config>${cmake.build.type}</cmake.config>
 			</properties>
 		</profile>

@@ -5,6 +5,7 @@
 
 #include "api/scoped_refptr.h"
 #include "modules/audio_device/include/audio_device.h"
+#include "rtc_base/ref_counted_object.h"
 
 namespace mdt {
 
@@ -87,10 +88,19 @@ class WasapiLoopbackAdm : public webrtc::AudioDeviceModule {
     int32_t SetStereoRecording(bool enable) override;
     int32_t StereoRecording(bool* enabled) const override;
 
+    // Built-in audio processing
+    bool BuiltInAECIsAvailable() const override;
+    bool BuiltInAGCIsAvailable() const override;
+    bool BuiltInNSIsAvailable() const override;
+    int32_t EnableBuiltInAEC(bool enable) override;
+    int32_t EnableBuiltInAGC(bool enable) override;
+    int32_t EnableBuiltInNS(bool enable) override;
+
     // Delay
     int32_t PlayoutDelay(uint16_t* delayMS) const override;
 
  private:
+    friend class rtc::RefCountedObject<WasapiLoopbackAdm>;
     WasapiLoopbackAdm();
 
     struct Impl;
