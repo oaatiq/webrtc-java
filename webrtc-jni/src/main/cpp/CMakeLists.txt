@@ -86,3 +86,4 @@ install(TARGETS ${PROJECT_NAME}
 	RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX} COMPONENT Runtime
 	LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX} COMPONENT Runtime
 )
+# mdt3: windows audio dir now also contains WasapiMicCapture.cpp (re-glob).

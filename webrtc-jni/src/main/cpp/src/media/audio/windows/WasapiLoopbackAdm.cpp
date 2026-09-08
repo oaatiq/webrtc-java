@@ -4,13 +4,19 @@
 
 #include "media/audio/windows/WasapiLoopbackAdm.h"
 #include "media/audio/windows/WasapiLoopbackCapture.h"
+#include "media/audio/windows/WasapiMicCapture.h"
 
 #include "modules/audio_device/include/audio_device.h"
+#include "modules/audio_processing/include/audio_processing.h"
+#include "api/scoped_refptr.h"
 #include "rtc_base/ref_counted_object.h"
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
+#include <deque>
 #include <mutex>
+#include <vector>
 
 namespace mdt {
 
@@ -22,7 +28,20 @@ struct WasapiLoopbackAdm::Impl {
     std::mutex transport_mu;
     webrtc::AudioTransport* transport = nullptr;
 
-    WasapiLoopbackCapture capture;
+    WasapiLoopbackCapture capture;     // render mix — the laptop's own audio
+    WasapiMicCapture mic_capture;      // the microphone — surrounding room audio
+    bool mic_active = false;
+
+    // The mic thread only queues raw frames; the loopback thread (the mix clock
+    // master) consumes them, so the APM is only ever touched from one thread.
+    std::mutex mic_mu;
+    std::deque<std::vector<int16_t>> mic_frames;
+    static constexpr size_t kMaxMicFrames = 8;
+
+    // AEC: running the mic through the APM with the render mix as the reverse
+    // (reference) stream cancels the laptop's own speakers out of the room audio,
+    // so the laptop audio is heard once (from the loopback), not doubled.
+    rtc::scoped_refptr<webrtc::AudioProcessing> apm;
 };
 
 WasapiLoopbackAdm::WasapiLoopbackAdm() : impl_(std::make_unique<Impl>()) {}
@@ -69,13 +88,84 @@ bool WasapiLoopbackAdm::RecordingIsInitialized() const {
 int32_t WasapiLoopbackAdm::StartRecording() {
     if (impl_->recording.exchange(true)) return 0;
 
+    constexpr int kAecDelayMs = 30;
+    constexpr size_t kN = static_cast<size_t>(kFrameSamplesPerChannel) * kFrameChannels;
+
+    // Build the echo canceller. If anything here fails we fall back to
+    // loopback-only (the previous behaviour) — mic mixing is best-effort.
+    impl_->apm = webrtc::AudioProcessingBuilder().Create();
+    if (impl_->apm) {
+        webrtc::AudioProcessing::Config cfg;
+        cfg.echo_canceller.enabled = true;                    // strip speakers from mic
+        cfg.echo_canceller.enforce_high_pass_filtering = true;
+        cfg.high_pass_filter.enabled = true;
+        cfg.noise_suppression.enabled = false;                // keep ambient room sound
+        cfg.gain_controller2.enabled = true;                  // auto-level the room mic
+        cfg.gain_controller2.adaptive_digital.enabled = true;
+        impl_->apm->ApplyConfig(cfg);
+    }
+
+    // Start the microphone. Its thread only enqueues raw frames; all APM work
+    // happens on the loopback thread below, so the APM stays single-threaded.
+    impl_->mic_active = false;
+    if (impl_->apm) {
+        auto mic_sink = [this, kN](const int16_t* pcm) {
+            std::lock_guard<std::mutex> lk(impl_->mic_mu);
+            if (impl_->mic_frames.size() >= Impl::kMaxMicFrames) {
+                impl_->mic_frames.pop_front();  // drop oldest, keep latency bounded
+            }
+            impl_->mic_frames.emplace_back(pcm, pcm + kN);
+        };
+        if (impl_->mic_capture.Start(mic_sink) == WasapiMicCapture::StartResult::kOk) {
+            impl_->mic_active = true;
+        } else {
+            std::fprintf(stderr, "WasapiLoopbackAdm: mic unavailable (%s); loopback only\n",
+                         impl_->mic_capture.last_error().c_str());
+        }
+    }
+
+    // The loopback capture is the mix clock: per render frame, AEC the mic
+    // against it and sum, then hand the combined frame to WebRTC.
     WasapiLoopbackCapture::Options options{};
-    auto sink = [this](const int16_t* pcm) {
+    auto sink = [this, kN, kAecDelayMs](const int16_t* pcm) {
+        int16_t mixed[kFrameSamplesPerChannel * kFrameChannels];
+        std::memcpy(mixed, pcm, kN * sizeof(int16_t));  // laptop audio, heard once
+
+        if (impl_->mic_active && impl_->apm) try {
+            const webrtc::StreamConfig sc(kFrameSampleRate, kFrameChannels);
+            int16_t scratch[kFrameSamplesPerChannel * kFrameChannels];
+            // Reference = what the speakers are playing (the render mix).
+            impl_->apm->ProcessReverseStream(pcm, sc, sc, scratch);
+
+            std::vector<int16_t> mic;
+            {
+                std::lock_guard<std::mutex> lk(impl_->mic_mu);
+                if (!impl_->mic_frames.empty()) {
+                    mic = std::move(impl_->mic_frames.front());
+                    impl_->mic_frames.pop_front();
+                }
+            }
+            if (mic.size() == kN) {
+                int16_t mic_clean[kFrameSamplesPerChannel * kFrameChannels];
+                impl_->apm->set_stream_delay_ms(kAecDelayMs);
+                impl_->apm->ProcessStream(mic.data(), sc, sc, mic_clean);  // echo removed
+                for (size_t i = 0; i < kN; ++i) {
+                    int32_t s = static_cast<int32_t>(mixed[i]) + static_cast<int32_t>(mic_clean[i]);
+                    if (s > 32767) s = 32767;
+                    else if (s < -32768) s = -32768;
+                    mixed[i] = static_cast<int16_t>(s);
+                }
+            }
+        } catch (...) {
+            // Any failure in the mic/AEC path degrades to loopback-only for this
+            // frame rather than tearing down the capture thread.
+        }
+
         std::lock_guard<std::mutex> lk(impl_->transport_mu);
         if (!impl_->transport) return;
         uint32_t new_mic_level = 0;
         impl_->transport->RecordedDataIsAvailable(
-            pcm,
+            mixed,
             kFrameSamplesPerChannel,
             sizeof(int16_t) * kFrameChannels,
             kFrameChannels,
@@ -89,6 +179,9 @@ int32_t WasapiLoopbackAdm::StartRecording() {
     auto res = impl_->capture.Start(options, std::move(sink));
     if (res != WasapiLoopbackCapture::StartResult::kOk) {
         impl_->recording.store(false);
+        impl_->mic_capture.StopAndJoin();
+        impl_->mic_active = false;
+        impl_->apm = nullptr;
         return -1;
     }
     return 0;
@@ -97,6 +190,13 @@ int32_t WasapiLoopbackAdm::StartRecording() {
 int32_t WasapiLoopbackAdm::StopRecording() {
     if (!impl_->recording.exchange(false)) return 0;
     impl_->capture.StopAndJoin();
+    impl_->mic_capture.StopAndJoin();
+    {
+        std::lock_guard<std::mutex> lk(impl_->mic_mu);
+        impl_->mic_frames.clear();
+    }
+    impl_->mic_active = false;
+    impl_->apm = nullptr;
     return 0;
 }
 

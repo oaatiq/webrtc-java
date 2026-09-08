@@ -4,7 +4,7 @@
 
 	<groupId>dev.onvoid.webrtc</groupId>
 	<artifactId>webrtc-java-parent</artifactId>
-	<version>0.10.0-mdt2</version>
+	<version>0.10.0-mdt3</version>
 	<packaging>pom</packaging>
 
 	<name>webrtc-java-parent</name>
