@@ -205,10 +205,17 @@ class WasapiLoopbackCapture::Impl {
         fmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
         fmt.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 
+        // Process-loopback capture REQUIRES AUDCLNT_STREAMFLAGS_LOOPBACK to be
+        // set explicitly. Without it, IAudioClient::Initialize returns
+        // AUDCLNT_E_INVALID_STREAM_FLAG (0x88890021) — verified on real
+        // hardware via third_party/wasapi-loopback-poc. AUTOCONVERTPCM /
+        // SRC_DEFAULT_QUALITY are ALSO invalid in this flags position for the
+        // process-loopback virtual device (same INVALID_STREAM_FLAG), and are
+        // unnecessary: the 48 kHz float32 stereo format below is provided to
+        // Initialize directly, so the device converts to it internally.
         const DWORD init_flags =
-            AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-            AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-            AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+            AUDCLNT_STREAMFLAGS_LOOPBACK |
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
         hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, init_flags,
                                 kBufferDuration, 0,
                                 reinterpret_cast<WAVEFORMATEX*>(&fmt), nullptr);
